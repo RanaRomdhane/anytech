@@ -1,0 +1,109 @@
+<div class="app-shell" [attr.dir]="direction()">
+  <a class="skip-link" href="#main-content">Aller au contenu principal</a>
+  <aside class="sidebar" aria-label="Navigation principale">
+    <div class="brand">
+      <img src="anytech-logo.jpg" alt="AnyTech" />
+      <div><span class="brand-name">ANYTECH</span><span class="brand-product">Commerce AI</span></div>
+    </div>
+    <div class="workspace-switcher" role="button" tabindex="0" aria-label="Changer d’entreprise">
+      <span class="workspace-mark">NA</span>
+      <span class="workspace-copy"><strong>Nova Atelier</strong><small>Espace principal</small></span>
+      <span class="chevron" aria-hidden="true">⌄</span>
+    </div>
+    <nav>
+      <p class="nav-label">Opérations</p>
+      @for (item of navigation; track item.label) {
+        <button type="button" class="nav-item" [class.active]="activeSection() === item.label" (click)="selectSection(item.label)">
+          <span class="nav-icon" [attr.data-icon]="item.icon" aria-hidden="true"></span><span>{{ item.label }}</span>
+          @if (item.badge) { <span class="nav-badge">{{ item.badge }}</span> }
+        </button>
+      }
+      <p class="nav-label admin-label">Pilotage</p>
+      @for (item of administration; track item.label) {
+        <button type="button" class="nav-item" [class.active]="activeSection() === item.label" (click)="selectSection(item.label)">
+          <span class="nav-icon" [attr.data-icon]="item.icon" aria-hidden="true"></span><span>{{ item.label }}</span>
+        </button>
+      }
+    </nav>
+    <div class="sidebar-footer">
+      <div class="quota-head"><span>Utilisation IA</span><strong>68 %</strong></div>
+      <mat-progress-bar mode="determinate" value="68" aria-label="Utilisation IA : 68 %" />
+      <small>6 820 / 10 000 conversations</small>
+      <button class="profile" type="button">
+        <span class="avatar">RA</span><span><strong>Rana Admin</strong><small>Administratrice</small></span><span aria-hidden="true">•••</span>
+      </button>
+    </div>
+  </aside>
+
+  <section class="main-column">
+    <header class="topbar">
+      <div class="mobile-brand"><img src="anytech-logo.jpg" alt="" /><strong>ANYTECH</strong></div>
+      <label class="search">
+        <span class="nav-icon" data-icon="search" aria-hidden="true"></span><span class="sr-only">Rechercher</span>
+        <input type="search" placeholder="Rechercher une conversation, commande, client…" /><kbd>⌘ K</kbd>
+      </label>
+      <div class="top-actions">
+        <button class="language" type="button" (click)="toggleLocale()" matTooltip="Changer la langue">{{ locale() }}</button>
+        <button class="icon-button notification" type="button" aria-label="Notifications" matTooltip="Notifications">
+          <span class="nav-icon" data-icon="bell" aria-hidden="true"></span><span class="notification-dot"></span>
+        </button>
+        <button mat-flat-button class="primary-action"><span aria-hidden="true">＋</span> Nouvelle commande</button>
+      </div>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <section class="page-heading">
+        <div><p class="eyebrow">{{ currentDate }}</p><h1>{{ activeSection() }}</h1><p>Voici ce qui se passe dans votre commerce aujourd’hui.</p></div>
+        <div class="live-status"><span></span> Système opérationnel</div>
+      </section>
+
+      <section class="metric-grid" aria-label="Indicateurs clés">
+        @for (metric of metrics; track metric.label) {
+          <article class="metric-card" [attr.data-tone]="metric.tone">
+            <div class="metric-top"><span class="metric-icon"><span class="nav-icon" [attr.data-icon]="metric.icon"></span></span><span class="trend">↗ {{ metric.trend }}</span></div>
+            <p>{{ metric.label }}</p><strong>{{ metric.value }}</strong><small>{{ metric.detail }}</small>
+          </article>
+        }
+      </section>
+
+      <section class="dashboard-grid">
+        <article class="panel performance-panel">
+          <header class="panel-header"><div><h2>Performance commerciale</h2><p>Valeur des commandes confirmées</p></div><button class="period-select" type="button">30 derniers jours <span>⌄</span></button></header>
+          <div class="chart-summary"><strong>24 860 DT</strong><span>+9,8 %</span></div>
+          <div class="chart" aria-label="Courbe de performance sur 30 jours">
+            <div class="chart-grid"><i></i><i></i><i></i><i></i></div>
+            <div class="bars">@for (bar of chartBars; track $index) { <span [style.height.%]="bar" [class.highlight]="$index === chartBars.length - 2"></span> }</div>
+          </div>
+          <div class="chart-labels"><span>20 août</span><span>27 août</span><span>3 sept.</span><span>10 sept.</span><span>Aujourd’hui</span></div>
+        </article>
+
+        <article class="panel attention-panel">
+          <header class="panel-header"><div><h2>À traiter</h2><p>Actions qui demandent votre attention</p></div><span class="attention-count">6</span></header>
+          <ul class="attention-list">
+            <li><span class="task-icon warning"><span class="nav-icon" data-icon="hand"></span></span><span><strong>3 reprises humaines</strong><small>Conversations mises en pause</small></span><button type="button" aria-label="Voir les reprises humaines">→</button></li>
+            <li><span class="task-icon danger"><span class="nav-icon" data-icon="truck"></span></span><span><strong>2 livraisons en erreur</strong><small>Vérification transporteur requise</small></span><button type="button" aria-label="Voir les livraisons en erreur">→</button></li>
+            <li><span class="task-icon info"><span class="nav-icon" data-icon="box"></span></span><span><strong>1 rupture de stock</strong><small>Atlas Pro — Noir</small></span><button type="button" aria-label="Voir la rupture de stock">→</button></li>
+          </ul>
+        </article>
+
+        <article class="panel conversations-panel">
+          <header class="panel-header"><div><h2>Conversations récentes</h2><p>WhatsApp Business</p></div><button class="text-action" type="button">Tout afficher <span>→</span></button></header>
+          <ul class="conversation-list">
+            @for (conversation of conversations; track conversation.name) {
+              <li><span class="contact-avatar" [attr.data-color]="conversation.color">{{ conversation.initials }}</span><span class="conversation-copy"><span><strong>{{ conversation.name }}</strong><time>{{ conversation.time }}</time></span><small>{{ conversation.message }}</small></span><span class="status-chip" [class.intervention]="conversation.status === 'Intervention'">{{ conversation.status }}</span></li>
+            }
+          </ul>
+        </article>
+
+        <article class="panel orders-panel">
+          <header class="panel-header"><div><h2>Dernières commandes</h2><p>Synchronisées en temps réel</p></div><button class="text-action" type="button">Voir les commandes <span>→</span></button></header>
+          <div class="order-table" role="table" aria-label="Dernières commandes">
+            @for (order of orders; track order.ref) {
+              <div class="order-row" role="row"><strong role="cell">{{ order.ref }}</strong><span role="cell">{{ order.customer }}</span><span role="cell">{{ order.amount }}</span><span class="order-state" role="cell" [attr.data-state]="order.state">{{ order.state }}</span></div>
+            }
+          </div>
+        </article>
+      </section>
+    </main>
+  </section>
+</div>

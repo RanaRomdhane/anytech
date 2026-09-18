@@ -1,0 +1,43 @@
+[project]
+name = "anytech-api"
+version = "0.1.0"
+description = "AnyTech AI Social Commerce API"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic==1.16.5",
+  "celery[redis]==5.5.3",
+  "fastapi==0.116.1",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.2.10",
+  "pydantic-settings==2.10.1",
+  "pyjwt==2.10.1",
+  "pwdlib[argon2]==0.2.1",
+  "sqlalchemy==2.0.43",
+  "uvicorn[standard]==0.35.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+  "pytest-cov==6.2.1",
+  "ruff==0.12.12"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

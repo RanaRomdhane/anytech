@@ -1,0 +1,11 @@
+{
+  "name": "anytech",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "web:dev": "pnpm --dir apps/web start",
+    "web:build": "pnpm --dir apps/web build",
+    "web:test": "pnpm --dir apps/web test --watch=false --browsers=ChromeHeadless"
+  },
+  "packageManager": "pnpm@11.19.0"
+}
