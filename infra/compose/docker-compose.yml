@@ -29,6 +29,9 @@ services:
   api:
     build: ../../apps/api
     env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://anytech:anytech@postgres:5432/anytech
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +44,9 @@ services:
     build: ../../apps/api
     command: celery -A app.worker.celery_app worker --loglevel=INFO
     env_file: ../../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://anytech:anytech@postgres:5432/anytech
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
