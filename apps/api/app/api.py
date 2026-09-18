@@ -28,8 +28,12 @@ from app.models import (
     Company,
     Conversation,
     ConversationMode,
+    Customer,
     Membership,
+    Message,
     Order,
+    OrderItem,
+    OrderStatus,
     OutboxEvent,
     Product,
     ProductVariant,
@@ -72,17 +76,164 @@ def seed_demo() -> None:
     if not settings.demo_mode:
         return
     with SessionLocal.begin() as db:
-        if db.scalar(select(func.count()).select_from(User)):
+        user = db.scalar(select(User).where(User.email == "admin@anytech.tn"))
+        if user is None:
+            company = Company(name="AnyTech Demo")
+            user = User(
+                email="admin@anytech.tn",
+                full_name="Rana AnyTech",
+                password_hash=hash_password("AnytechDemo2026!"),
+            )
+            db.add_all([company, user])
+            db.flush()
+            db.add(Membership(company_id=company.id, user_id=user.id, role=Role.COMPANY_ADMIN))
+        else:
+            membership = db.scalar(select(Membership).where(Membership.user_id == user.id))
+            if membership is None:
+                return
+            company = db.get(Company, membership.company_id)
+            if company is None:
+                return
+
+        if db.scalar(
+            select(func.count()).select_from(Product).where(Product.company_id == company.id)
+        ):
             return
-        company = Company(name="AnyTech Demo")
-        user = User(
-            email="admin@anytech.tn",
-            full_name="Rana AnyTech",
-            password_hash=hash_password("AnytechDemo2026!"),
-        )
-        db.add_all([company, user])
+
+        products = [
+            Product(
+                company_id=company.id, name="Atlas Pro", description="Sneakers urbaines légères"
+            ),
+            Product(
+                company_id=company.id,
+                name="Sahara Tote",
+                description="Sac quotidien en toile renforcée",
+            ),
+            Product(
+                company_id=company.id, name="Noura Linen", description="Chemise en lin respirant"
+            ),
+        ]
+        variants = [
+            ProductVariant(
+                company_id=company.id,
+                sku="ATL-NOI-38",
+                attributes={"couleur": "Noir", "taille": "38"},
+                price_minor=137900,
+                stock_on_hand=12,
+            ),
+            ProductVariant(
+                company_id=company.id,
+                sku="SAH-NAT",
+                attributes={"couleur": "Naturel"},
+                price_minor=89000,
+                stock_on_hand=7,
+            ),
+            ProductVariant(
+                company_id=company.id,
+                sku="NOU-BLE-M",
+                attributes={"couleur": "Bleu", "taille": "M"},
+                price_minor=119500,
+                stock_on_hand=2,
+            ),
+        ]
+        for product, variant in zip(products, variants, strict=True):
+            product.variants.append(variant)
+        db.add_all(products)
         db.flush()
-        db.add(Membership(company_id=company.id, user_id=user.id, role=Role.COMPANY_ADMIN))
+
+        customers = [
+            Customer(
+                company_id=company.id, name="Meriem Khelifi", phone="+216 20 100 101", city="Tunis"
+            ),
+            Customer(
+                company_id=company.id, name="Youssef Zayani", phone="+216 22 200 202", city="Sfax"
+            ),
+            Customer(
+                company_id=company.id, name="Sarra Ayadi", phone="+216 55 300 303", city="Sousse"
+            ),
+        ]
+        db.add_all(customers)
+        db.flush()
+        conversations = [
+            Conversation(
+                company_id=company.id, customer_id=customers[0].id, mode=ConversationMode.AI_ACTIVE
+            ),
+            Conversation(
+                company_id=company.id, customer_id=customers[1].id, mode=ConversationMode.AI_ACTIVE
+            ),
+            Conversation(
+                company_id=company.id, customer_id=customers[2].id, mode=ConversationMode.AI_PAUSED
+            ),
+        ]
+        db.add_all(conversations)
+        db.flush()
+        db.add_all(
+            [
+                Message(
+                    company_id=company.id,
+                    conversation_id=conversations[0].id,
+                    external_id="demo-message-1",
+                    direction="inbound",
+                    sender_type="customer",
+                    body="Merci, je confirme la commande.",
+                ),
+                Message(
+                    company_id=company.id,
+                    conversation_id=conversations[1].id,
+                    external_id="demo-message-2",
+                    direction="inbound",
+                    sender_type="customer",
+                    body="Le modèle noir est disponible ?",
+                ),
+                Message(
+                    company_id=company.id,
+                    conversation_id=conversations[2].id,
+                    external_id="demo-message-3",
+                    direction="inbound",
+                    sender_type="customer",
+                    body="Nheb taille 38, livraison à Sousse.",
+                ),
+            ]
+        )
+        orders = [
+            Order(
+                company_id=company.id,
+                customer_id=customers[0].id,
+                conversation_id=conversations[0].id,
+                status=OrderStatus.CONFIRMED,
+                total_minor=137900,
+            ),
+            Order(
+                company_id=company.id,
+                customer_id=customers[1].id,
+                conversation_id=conversations[1].id,
+                status=OrderStatus.PREPARING,
+                total_minor=89000,
+            ),
+            Order(
+                company_id=company.id,
+                customer_id=customers[2].id,
+                conversation_id=conversations[2].id,
+                status=OrderStatus.READY_FOR_DELIVERY,
+                total_minor=119500,
+            ),
+        ]
+        db.add_all(orders)
+        db.flush()
+        db.add_all(
+            [
+                OrderItem(
+                    order_id=order.id,
+                    company_id=company.id,
+                    variant_id=variant.id,
+                    sku=variant.sku,
+                    product_name=product.name,
+                    quantity=1,
+                    unit_price_minor=variant.price_minor,
+                )
+                for order, product, variant in zip(orders, products, variants, strict=True)
+            ]
+        )
 
 
 @asynccontextmanager
@@ -249,12 +400,20 @@ messaging = APIRouter(prefix="/api/v1/companies/{company_id}", tags=["Conversati
 def list_conversations(
     context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)
 ):
-    return db.scalars(
-        select(Conversation)
-        .where(Conversation.company_id == context.company_id)
+    rows = db.execute(
+        select(Conversation, Customer.name)
+        .join(Customer, Customer.id == Conversation.customer_id)
+        .where(
+            Conversation.company_id == context.company_id,
+            Customer.company_id == context.company_id,
+        )
         .order_by(Conversation.updated_at.desc())
         .limit(100)
     ).all()
+    return [
+        ConversationOut.model_validate(conversation).model_copy(update={"customer_name": name})
+        for conversation, name in rows
+    ]
 
 
 def _change_mode(

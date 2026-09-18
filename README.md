@@ -6,13 +6,13 @@ AnyTech is a multi-tenant commerce workspace that turns WhatsApp conversations i
 
 This repository contains the first runnable product foundation:
 
-- Angular 20 dashboard with AnyTech branding, responsive layouts, RTL switching, accessible controls, and operational views.
+- Angular 20 application with login, protected routing, responsive operational pages, RTL switching and accessible controls.
 - FastAPI REST API with JWT authentication, company memberships, role checks, tenant-scoped catalogue and conversations.
 - Draft order, immutable quote, explicit confirmation evidence, transactional stock reservation, and idempotent confirmation.
 - Verified WhatsApp webhook handshake/signature entry points with durable, duplicate-safe receipt storage.
 - PostgreSQL schema and row-level security migration, Redis/Celery worker foundation, Docker Compose, CI, tests, and project documentation.
 
-The dashboard currently uses representative pilot data. WhatsApp outbound delivery, a hosted LLM, a real Tunisian carrier, invitation/MFA flows, file storage, and production deployment require provider selection or credentials and remain release blockers. See [implementation status](docs/implementation-status.md).
+Development mode seeds representative products, customers, conversations and orders in PostgreSQL. The dashboard, catalogue, inbox and order list read those records through the API; the remaining navigation pages show their explicit implementation and integration gates. WhatsApp outbound delivery, a hosted LLM, a real Tunisian carrier, invitation/MFA flows, file storage, and production deployment require provider selection or credentials and remain release blockers. See [implementation status](docs/implementation-status.md).
 
 ## Run locally
 
@@ -69,4 +69,3 @@ cd apps/api
 ## License
 
 Copyright © 2026 AnyTech Company. All rights reserved. This public repository is source-available for review; no open-source license is granted. See [LICENSE](LICENSE).
-

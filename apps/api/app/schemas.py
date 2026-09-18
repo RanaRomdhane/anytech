@@ -84,6 +84,7 @@ class ConversationOut(StrictModel):
     assigned_user_id: uuid.UUID | None
     version: int
     updated_at: datetime
+    customer_name: str = "Client WhatsApp"
 
 
 class ConversationAction(StrictModel):
