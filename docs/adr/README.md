@@ -4,6 +4,6 @@
 - [ADR-002: Tenant isolation](002-tenant-isolation.md)
 - [ADR-003: Commerce authority](003-commerce-authority.md)
 - [ADR-004: Durable provider work](004-durable-provider-work.md)
+- [ADR-011: Hosted LLM provider candidate](011-hosted-llm-provider.md)
 
-Provider/model/carrier decisions must be added after benchmark and contract evidence exists.
-
+The LLM record remains proposed until the multilingual benchmark passes. The carrier decision still requires contract and sandbox evidence.

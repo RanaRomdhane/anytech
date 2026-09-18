@@ -44,6 +44,32 @@ export interface Conversation {
   customer_name: string;
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+  city: string;
+  governorate: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Message {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  sender_type: string;
+  body: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ConversationDetail {
+  conversation: Conversation;
+  customer: Customer;
+  messages: Message[];
+}
+
 export interface OrderItem {
   id: string;
   variant_id: string;
@@ -63,4 +89,58 @@ export interface Order {
   items: OrderItem[];
   created_at: string;
   updated_at: string;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  status: string;
+  currency: string;
+  timezone: string;
+  updated_at: string;
+}
+
+export interface TeamMember {
+  user_id: string;
+  full_name: string;
+  email: string;
+  role: Membership['role'];
+  active: boolean;
+  joined_at: string;
+}
+
+export interface Analytics {
+  customers: number;
+  products: number;
+  conversations: number;
+  human_conversations: number;
+  orders: number;
+  confirmed_orders: number;
+  delivered_orders: number;
+  order_value_minor: number;
+  low_stock_variants: number;
+  conversion_rate: number;
+}
+
+export interface Integration {
+  key: 'whatsapp' | 'llm' | 'carrier';
+  name: string;
+  configured: boolean;
+  detail: string;
+}
+
+export interface AIStatus {
+  configured: boolean;
+  provider: string | null;
+  model: string | null;
+  monthly_budget_minor: number;
+  spent_minor: number;
+}
+
+export interface AuditEvent {
+  id: string;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  created_at: string;
 }

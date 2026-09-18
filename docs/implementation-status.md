@@ -8,7 +8,7 @@ Status date: 2026-09-18
 |---|---|---|
 | Repository, pinned runtime manifests, Docker Compose | Implemented | Root scripts, application Dockerfiles, infrastructure compose file |
 | Branded responsive application shell | Implemented | Transparent brand asset, login, protected routes, desktop/tablet/mobile CSS and RTL direction switch |
-| Live operational frontend slice | Implemented | Dashboard, catalogue creation, inbox takeover and order list use the FastAPI contracts and PostgreSQL demo data |
+| Live operational frontend | Implemented | Dashboard, catalogue creation, persisted inbox history, order creation, customers, deliveries, analytics, integration status, team, settings and audit use tenant-scoped API data |
 | Authentication foundation | Implemented | Argon2id password verification and short-lived signed access token |
 | Company membership and API tenant scoping | Implemented | Shared dependency plus cross-tenant API test |
 | PostgreSQL tenant RLS | Implemented in migration | Forced policies based on transaction-local company context |
@@ -31,6 +31,4 @@ Status date: 2026-09-18
 | Production operations | Provision separate stage/prod hosts, secrets, TLS, monitoring, encrypted backups, WAL archiving and complete a restore drill. |
 | Legal/privacy decision | Confirm hosting region, processors, retention and customer notices for the launch market. |
 
-Mocked or static dashboard behavior is not evidence of production provider completion.
-
-The development seed is synthetic and exists only to exercise real application contracts. Operational pages for customers, delivery, AI, analytics, integrations, team and settings state their next implementation gates rather than simulating external success.
+Mocked or static provider behavior is not evidence of production provider completion. The local seed is synthetic and exists only to exercise the same database and API contracts used by the application. Provider-dependent screens report the actual configured state and never simulate a successful connection.

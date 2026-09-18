@@ -7,6 +7,7 @@ import { User } from './models';
 export class AuthService {
   private readonly http = inject(HttpClient);
   readonly user = signal<User | null>(null);
+  readonly workspaceName = signal('AnyTech');
   readonly companyId = computed(() => this.user()?.memberships[0]?.company_id ?? null);
   readonly role = computed(() => this.user()?.memberships[0]?.role ?? null);
 

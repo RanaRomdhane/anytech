@@ -18,6 +18,14 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     whatsapp_verify_token: str = ""
     whatsapp_app_secret: str = ""
+    whatsapp_phone_number_id: str = ""
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_api_key: str = ""
+    llm_base_url: str = "https://api.groq.com/openai/v1"
+    llm_monthly_budget_minor: int = 0
+    carrier_provider: str = ""
+    carrier_api_key: str = ""
 
     @property
     def origins(self) -> list[str]:

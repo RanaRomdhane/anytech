@@ -42,14 +42,23 @@ from app.models import (
     WebhookEvent,
 )
 from app.schemas import (
+    AIStatusOut,
+    AnalyticsOut,
+    AuditOut,
+    CompanyOut,
+    CompanyUpdate,
     ConfirmOrder,
     ConversationAction,
+    ConversationDetailOut,
     ConversationOut,
+    CustomerOut,
     HealthOut,
+    IntegrationOut,
     LoginIn,
     LoginOut,
     MembershipOut,
     MeOut,
+    MessageOut,
     OrderCreate,
     OrderOut,
     PaginatedProducts,
@@ -57,6 +66,7 @@ from app.schemas import (
     ProductOut,
     QuoteCreate,
     QuoteOut,
+    TeamMemberOut,
 )
 from app.security import create_access_token, hash_password, verify_password
 from app.services import audit, confirm_order, create_order, quote_order
@@ -78,7 +88,7 @@ def seed_demo() -> None:
     with SessionLocal.begin() as db:
         user = db.scalar(select(User).where(User.email == "admin@anytech.tn"))
         if user is None:
-            company = Company(name="AnyTech Demo")
+            company = Company(name="AnyTech")
             user = User(
                 email="admin@anytech.tn",
                 full_name="Rana AnyTech",
@@ -94,6 +104,9 @@ def seed_demo() -> None:
             company = db.get(Company, membership.company_id)
             if company is None:
                 return
+
+        if company.name == "AnyTech Demo":
+            company.name = "AnyTech"
 
         if db.scalar(
             select(func.count()).select_from(Product).where(Product.company_id == company.id)
@@ -344,6 +357,212 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return serialize_user(db, user)
 
 
+workspace = APIRouter(prefix="/api/v1/companies/{company_id}", tags=["Workspace"])
+
+
+@workspace.get("/settings", response_model=CompanyOut)
+def get_settings(context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)):
+    company = db.get(Company, context.company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return company
+
+
+@workspace.patch("/settings", response_model=CompanyOut)
+def update_settings(
+    payload: CompanyUpdate,
+    context: CompanyContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    company = db.get(Company, context.company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Company not found")
+    company.name = payload.name.strip()
+    company.currency = payload.currency
+    company.timezone = payload.timezone
+    audit(
+        db,
+        company_id=context.company_id,
+        actor_id=context.user.id,
+        action="company.settings.updated",
+        resource_type="company",
+        resource_id=company.id,
+    )
+    db.commit()
+    db.refresh(company)
+    return company
+
+
+@workspace.get("/customers", response_model=list[CustomerOut])
+def list_customers(
+    q: str | None = Query(default=None, max_length=200),
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    statement = select(Customer).where(Customer.company_id == context.company_id)
+    if q:
+        value = f"%{q}%"
+        statement = statement.where(
+            or_(Customer.name.ilike(value), Customer.phone.ilike(value), Customer.city.ilike(value))
+        )
+    return db.scalars(statement.order_by(Customer.updated_at.desc()).limit(100)).all()
+
+
+@workspace.get("/team", response_model=list[TeamMemberOut])
+def list_team(context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(Membership, User)
+        .join(User, User.id == Membership.user_id)
+        .where(Membership.company_id == context.company_id)
+        .order_by(Membership.created_at)
+    ).all()
+    return [
+        TeamMemberOut(
+            user_id=user.id,
+            full_name=user.full_name,
+            email=user.email,
+            role=membership.role,
+            active=user.active,
+            joined_at=membership.created_at,
+        )
+        for membership, user in rows
+    ]
+
+
+@workspace.get("/analytics/summary", response_model=AnalyticsOut)
+def analytics_summary(
+    context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)
+):
+    company_id = context.company_id
+    conversations = db.scalars(
+        select(Conversation).where(Conversation.company_id == company_id)
+    ).all()
+    orders = db.scalars(select(Order).where(Order.company_id == company_id)).all()
+    confirmed_states = {
+        OrderStatus.CONFIRMED,
+        OrderStatus.PREPARING,
+        OrderStatus.READY_FOR_DELIVERY,
+        OrderStatus.SENT_TO_DELIVERY,
+        OrderStatus.PICKED_UP,
+        OrderStatus.IN_TRANSIT,
+        OrderStatus.DELIVERED,
+    }
+    confirmed = sum(order.status in confirmed_states for order in orders)
+    return AnalyticsOut(
+        customers=db.scalar(
+            select(func.count()).select_from(Customer).where(Customer.company_id == company_id)
+        )
+        or 0,
+        products=db.scalar(
+            select(func.count()).select_from(Product).where(Product.company_id == company_id)
+        )
+        or 0,
+        conversations=len(conversations),
+        human_conversations=sum(
+            conversation.mode == ConversationMode.HUMAN_ACTIVE for conversation in conversations
+        ),
+        orders=len(orders),
+        confirmed_orders=confirmed,
+        delivered_orders=sum(order.status == OrderStatus.DELIVERED for order in orders),
+        order_value_minor=sum(
+            order.total_minor for order in orders if order.status != OrderStatus.CANCELLED
+        ),
+        low_stock_variants=db.scalar(
+            select(func.count())
+            .select_from(ProductVariant)
+            .where(
+                ProductVariant.company_id == company_id,
+                ProductVariant.active.is_(True),
+                ProductVariant.stock_on_hand - ProductVariant.stock_reserved < 5,
+            )
+        )
+        or 0,
+        conversion_rate=round(confirmed / len(conversations) * 100, 1) if conversations else 0,
+    )
+
+
+@workspace.get("/integrations", response_model=list[IntegrationOut])
+def integration_status(context: CompanyContext = Depends(company_context)):
+    del context
+    whatsapp_ready = bool(
+        settings.whatsapp_app_secret
+        and settings.whatsapp_verify_token
+        and settings.whatsapp_phone_number_id
+    )
+    llm_ready = bool(settings.llm_provider and settings.llm_model and settings.llm_api_key)
+    carrier_ready = bool(settings.carrier_provider and settings.carrier_api_key)
+    return [
+        IntegrationOut(
+            key="whatsapp",
+            name="WhatsApp Business",
+            configured=whatsapp_ready,
+            detail="Canal connecté" if whatsapp_ready else "Identifiants requis",
+        ),
+        IntegrationOut(
+            key="llm",
+            name="Assistant IA",
+            configured=llm_ready,
+            detail=(
+                f"{settings.llm_provider} · {settings.llm_model}"
+                if llm_ready
+                else "Fournisseur à connecter"
+            ),
+        ),
+        IntegrationOut(
+            key="carrier",
+            name="Transporteur",
+            configured=carrier_ready,
+            detail=settings.carrier_provider if carrier_ready else "Transporteur à sélectionner",
+        ),
+    ]
+
+
+@workspace.get("/ai/status", response_model=AIStatusOut)
+def ai_status(context: CompanyContext = Depends(company_context)):
+    del context
+    return AIStatusOut(
+        configured=bool(settings.llm_provider and settings.llm_model and settings.llm_api_key),
+        provider=settings.llm_provider or None,
+        model=settings.llm_model or None,
+        monthly_budget_minor=settings.llm_monthly_budget_minor,
+        spent_minor=0,
+    )
+
+
+@workspace.get("/audit", response_model=list[AuditOut])
+def list_audit(context: CompanyContext = Depends(require_admin), db: Session = Depends(get_db)):
+    return db.scalars(
+        select(AuditLog)
+        .where(AuditLog.company_id == context.company_id)
+        .order_by(AuditLog.created_at.desc())
+        .limit(50)
+    ).all()
+
+
+@workspace.get("/deliveries", response_model=list[OrderOut])
+def list_deliveries(
+    context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)
+):
+    delivery_states = {
+        OrderStatus.READY_FOR_DELIVERY,
+        OrderStatus.SENT_TO_DELIVERY,
+        OrderStatus.PICKED_UP,
+        OrderStatus.IN_TRANSIT,
+        OrderStatus.DELIVERED,
+        OrderStatus.FAILED_DELIVERY,
+        OrderStatus.RETURNED,
+    }
+    return (
+        db.scalars(
+            select(Order)
+            .where(Order.company_id == context.company_id, Order.status.in_(delivery_states))
+            .order_by(Order.updated_at.desc())
+        )
+        .unique()
+        .all()
+    )
+
+
 catalog = APIRouter(prefix="/api/v1/companies/{company_id}", tags=["Catalogue"])
 
 
@@ -414,6 +633,42 @@ def list_conversations(
         ConversationOut.model_validate(conversation).model_copy(update={"customer_name": name})
         for conversation, name in rows
     ]
+
+
+@messaging.get("/conversations/{conversation_id}", response_model=ConversationDetailOut)
+def conversation_detail(
+    conversation_id: uuid.UUID,
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    row = db.execute(
+        select(Conversation, Customer)
+        .join(Customer, Customer.id == Conversation.customer_id)
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.company_id == context.company_id,
+            Customer.company_id == context.company_id,
+        )
+    ).one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    conversation, customer = row
+    messages = db.scalars(
+        select(Message)
+        .where(
+            Message.company_id == context.company_id,
+            Message.conversation_id == conversation.id,
+        )
+        .order_by(Message.created_at)
+        .limit(200)
+    ).all()
+    return ConversationDetailOut(
+        conversation=ConversationOut.model_validate(conversation).model_copy(
+            update={"customer_name": customer.name}
+        ),
+        customer=CustomerOut.model_validate(customer),
+        messages=[MessageOut.model_validate(message) for message in messages],
+    )
 
 
 def _change_mode(
@@ -620,6 +875,7 @@ async def ingest_whatsapp(
 
 
 app.include_router(auth)
+app.include_router(workspace)
 app.include_router(catalog)
 app.include_router(messaging)
 app.include_router(orders)

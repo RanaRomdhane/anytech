@@ -87,6 +87,32 @@ class ConversationOut(StrictModel):
     customer_name: str = "Client WhatsApp"
 
 
+class CustomerOut(StrictModel):
+    id: uuid.UUID
+    name: str
+    phone: str
+    address: str
+    city: str
+    governorate: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageOut(StrictModel):
+    id: uuid.UUID
+    direction: str
+    sender_type: str
+    body: str
+    status: str
+    created_at: datetime
+
+
+class ConversationDetailOut(StrictModel):
+    conversation: ConversationOut
+    customer: CustomerOut
+    messages: list[MessageOut]
+
+
 class ConversationAction(StrictModel):
     expected_version: int = Field(ge=1)
 
@@ -146,6 +172,66 @@ class HealthOut(StrictModel):
     status: str
     service: str
     environment: str
+
+
+class CompanyOut(StrictModel):
+    id: uuid.UUID
+    name: str
+    status: str
+    currency: str
+    timezone: str
+    updated_at: datetime
+
+
+class CompanyUpdate(StrictModel):
+    name: str = Field(min_length=2, max_length=160)
+    currency: str = Field(pattern="^[A-Z]{3}$")
+    timezone: str = Field(min_length=3, max_length=60)
+
+
+class TeamMemberOut(StrictModel):
+    user_id: uuid.UUID
+    full_name: str
+    email: str
+    role: Role
+    active: bool
+    joined_at: datetime
+
+
+class AnalyticsOut(StrictModel):
+    customers: int
+    products: int
+    conversations: int
+    human_conversations: int
+    orders: int
+    confirmed_orders: int
+    delivered_orders: int
+    order_value_minor: int
+    low_stock_variants: int
+    conversion_rate: float
+
+
+class IntegrationOut(StrictModel):
+    key: str
+    name: str
+    configured: bool
+    detail: str
+
+
+class AIStatusOut(StrictModel):
+    configured: bool
+    provider: str | None
+    model: str | None
+    monthly_budget_minor: int
+    spent_minor: int
+
+
+class AuditOut(StrictModel):
+    id: uuid.UUID
+    action: str
+    resource_type: str
+    resource_id: uuid.UUID | None
+    created_at: datetime
 
 
 class ErrorBody(StrictModel):

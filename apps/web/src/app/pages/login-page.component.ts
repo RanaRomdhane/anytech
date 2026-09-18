@@ -36,8 +36,7 @@ import { AuthService } from '../core/auth.service';
               {{ loading() ? 'Connexion…' : 'Se connecter' }} <span aria-hidden="true">→</span>
             </button>
           </form>
-          <div class="demo-credentials"><span>Accès local de démonstration</span><code>admin@anytech.tn</code><code>AnytechDemo2026!</code></div>
-          <small class="login-legal">En vous connectant, vous accédez à un environnement de développement AnyTech.</small>
+          <small class="login-legal">Accès réservé aux équipes autorisées de votre espace AnyTech.</small>
         </div>
       </section>
     </main>
@@ -49,8 +48,8 @@ export class LoginPageComponent {
   protected readonly loading = signal(false);
   protected readonly error = signal('');
   protected readonly form = new FormGroup({
-    email: new FormControl('admin@anytech.tn', { nonNullable: true, validators: [Validators.required, Validators.email] }),
-    password: new FormControl('AnytechDemo2026!', { nonNullable: true, validators: [Validators.required] }),
+    email: new FormControl('', { nonNullable: true, validators: [Validators.required, Validators.email] }),
+    password: new FormControl('', { nonNullable: true, validators: [Validators.required] }),
   });
 
   protected submit(): void {

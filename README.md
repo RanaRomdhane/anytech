@@ -12,7 +12,7 @@ This repository contains the first runnable product foundation:
 - Verified WhatsApp webhook handshake/signature entry points with durable, duplicate-safe receipt storage.
 - PostgreSQL schema and row-level security migration, Redis/Celery worker foundation, Docker Compose, CI, tests, and project documentation.
 
-Development mode seeds representative products, customers, conversations and orders in PostgreSQL. The dashboard, catalogue, inbox and order list read those records through the API; the remaining navigation pages show their explicit implementation and integration gates. WhatsApp outbound delivery, a hosted LLM, a real Tunisian carrier, invitation/MFA flows, file storage, and production deployment require provider selection or credentials and remain release blockers. See [implementation status](docs/implementation-status.md).
+Development mode seeds representative products, customers, conversations and orders in PostgreSQL. Every navigation page reads tenant-scoped API data: persisted messages and customer context, order creation, delivery candidates, calculated analytics, integration readiness, team membership, company settings and audit history. WhatsApp outbound delivery, a hosted LLM, a real Tunisian carrier, invitation/MFA flows, file storage, and production deployment require provider selection or credentials and remain release blockers. See [implementation status](docs/implementation-status.md).
 
 ## Run locally
 
