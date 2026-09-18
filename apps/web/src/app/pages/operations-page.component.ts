@@ -2,11 +2,12 @@ import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { finalize } from 'rxjs';
+import { finalize, forkJoin } from 'rxjs';
 import { ApiService } from '../core/api.service';
 import { AuthService } from '../core/auth.service';
 import {
   AIStatus,
+  AIRun,
   Analytics,
   AuditEvent,
   Company,
@@ -55,8 +56,8 @@ type PageKey = 'customers' | 'deliveries' | 'ai' | 'analytics' | 'integrations' 
         <section class="panel connection-note"><span class="nav-icon" data-icon="settings"></span><div><h2>Identifiants protégés</h2><p>Les secrets de connexion restent protégés et ne sont jamais affichés dans l’application.</p></div></section>
       }
       @case ('ai') {
-        <section class="page-heading"><div><p class="eyebrow">Assistant commercial</p><h1>Agents IA</h1><p>Contrôlez la disponibilité du modèle et son budget mensuel.</p></div><a class="secondary-button" routerLink="/integrations">Gérer la connexion</a></section>
-        @if (ai(); as status) { <section class="ai-overview panel"><div class="ai-orb"><span class="nav-icon" data-icon="sparkles"></span></div><div><span class="status-chip" [class.intervention]="!status.configured">{{ status.configured ? 'Disponible' : 'Non connecté' }}</span><h2>{{ status.model || 'Assistant IA' }}</h2><p>{{ status.provider ? 'Fourni par ' + status.provider : 'Choisissez un fournisseur hébergé pour activer les réponses assistées.' }}</p></div><div class="budget-ring"><strong>{{ budgetPercent(status) }} %</strong><small>du budget</small></div></section><section class="analytics-grid"><article class="panel insight-card"><span class="section-kicker">Budget mensuel</span><strong>{{ money(status.monthly_budget_minor) }}</strong><h2>plafond configuré</h2><p>Les appels sont arrêtés lorsque la limite est atteinte.</p></article><article class="panel insight-card accent"><span class="section-kicker">Consommation</span><strong>{{ money(status.spent_minor) }}</strong><h2>utilisé ce mois</h2><p>Coût enregistré pour les conversations assistées.</p></article></section> }
+        <section class="page-heading"><div><p class="eyebrow">Assistant commercial</p><h1>Agents IA</h1><p>Contrôlez la disponibilité, l’usage et l’historique du modèle.</p></div><a class="secondary-button" routerLink="/integrations">Gérer la connexion</a></section>
+        @if (ai(); as status) { <section class="ai-overview panel"><div class="ai-orb"><span class="nav-icon" data-icon="sparkles"></span></div><div><span class="status-chip" [class.intervention]="!status.configured">{{ status.configured ? 'Disponible' : 'Non connecté' }}</span><h2>{{ status.model || 'Assistant IA' }}</h2><p>{{ status.provider ? 'Fourni par ' + status.provider : 'Choisissez un fournisseur hébergé pour activer les réponses assistées.' }}</p></div><div class="budget-ring"><strong>{{ status.successful_runs }}</strong><small>réponses</small></div></section><section class="analytics-grid"><article class="panel insight-card"><span class="section-kicker">Utilisation</span><strong>{{ status.run_count }}</strong><h2>exécution(s) enregistrée(s)</h2><p>{{ status.prompt_tokens + status.completion_tokens }} jeton(s) traités au total.</p></article><article class="panel insight-card accent"><span class="section-kicker">Fiabilité</span><strong>{{ successRate(status) }} %</strong><h2>exécutions réussies</h2><p>Chaque exécution conserve le modèle, la durée et l’usage sans enregistrer de raisonnement privé.</p></article></section><section class="panel data-panel ai-run-panel"><header class="panel-header"><div><span class="section-kicker">Historique</span><h2>Exécutions récentes</h2><p>Traçabilité des propositions générées</p></div></header><div class="responsive-table"><table><thead><tr><th>Date</th><th>Modèle</th><th>État</th><th>Jetons</th><th>Durée</th></tr></thead><tbody>@for (run of aiRuns(); track run.id) { <tr><td>{{ dateTime(run.created_at) }}</td><td>{{ run.model }}</td><td><span class="status-chip" [class.intervention]="run.status !== 'completed'">{{ run.status === 'completed' ? 'Réussie' : 'Échec' }}</span></td><td>{{ run.prompt_tokens + run.completion_tokens }}</td><td>{{ run.latency_ms }} ms</td></tr> }</tbody></table></div>@if (!aiRuns().length) { <div class="empty-state"><p>Aucune proposition générée.</p></div> }</section> }
       }
       @case ('team') {
         <section class="page-heading"><div><p class="eyebrow">Accès</p><h1>Équipe</h1><p>Membres autorisés et rôles appliqués à cet espace.</p></div></section>
@@ -82,6 +83,7 @@ export class OperationsPageComponent {
   protected readonly analytics = signal<Analytics | null>(null);
   protected readonly integrations = signal<Integration[]>([]);
   protected readonly ai = signal<AIStatus | null>(null);
+  protected readonly aiRuns = signal<AIRun[]>([]);
   protected readonly team = signal<TeamMember[]>([]);
   protected readonly auditEvents = signal<AuditEvent[]>([]);
   protected readonly saving = signal(false);
@@ -113,7 +115,7 @@ export class OperationsPageComponent {
     if (page === 'deliveries') this.api.deliveries().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (items) => this.deliveries.set(items), error: fail });
     if (page === 'analytics') this.api.analytics().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (data) => this.analytics.set(data), error: fail });
     if (page === 'integrations') this.api.integrations().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (items) => this.integrations.set(items), error: fail });
-    if (page === 'ai') this.api.aiStatus().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (status) => this.ai.set(status), error: fail });
+    if (page === 'ai') forkJoin({ status: this.api.aiStatus(), runs: this.api.aiRuns() }).pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: ({ status, runs }) => { this.ai.set(status); this.aiRuns.set(runs); }, error: fail });
     if (page === 'team') this.api.team().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (items) => this.team.set(items), error: fail });
     if (page === 'settings') {
       this.api.company().pipe(takeUntilDestroyed(this.destroyRef)).subscribe({ next: (company) => this.patchSettings(company), error: fail });
@@ -137,6 +139,7 @@ export class OperationsPageComponent {
   protected dateTime(value: string): string { return new Intl.DateTimeFormat('fr-TN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)); }
   protected deliveryCount(status: string): number { return this.deliveries().filter((order) => order.status === status).length; }
   protected budgetPercent(status: AIStatus): number { return status.monthly_budget_minor > 0 ? Math.min(100, Math.round((status.spent_minor / status.monthly_budget_minor) * 100)) : 0; }
+  protected successRate(status: AIStatus): number { return status.run_count ? Math.round(status.successful_runs / status.run_count * 100) : 0; }
   protected integrationIcon(key: Integration['key']): string { return key === 'whatsapp' ? 'message' : key === 'llm' ? 'sparkles' : 'truck'; }
   protected roleLabel(role: TeamMember['role']): string { return role === 'company_admin' ? 'Administrateur' : role === 'platform_admin' ? 'Plateforme' : 'Agent'; }
   protected statusLabel(status: string): string { return ({ READY_FOR_DELIVERY: 'Prête à livrer', SENT_TO_DELIVERY: 'Transmise', PICKED_UP: 'Collectée', IN_TRANSIT: 'En transit', DELIVERED: 'Livrée', FAILED_DELIVERY: 'Échec', RETURNED: 'Retournée' } as Record<string, string>)[status] ?? status; }

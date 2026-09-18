@@ -169,3 +169,88 @@ def confirm_order(db: Session, order: Order, payload: ConfirmOrder, actor_id: uu
     )
     db.flush()
     return order
+
+
+def transition_order(
+    db: Session,
+    order: Order,
+    *,
+    target: OrderStatus,
+    expected_version: int,
+    actor_id: uuid.UUID,
+) -> Order:
+    if order.version != expected_version:
+        raise HTTPException(status_code=409, detail="Order changed")
+    allowed = {
+        OrderStatus.CONFIRMED: OrderStatus.PREPARING,
+        OrderStatus.PREPARING: OrderStatus.READY_FOR_DELIVERY,
+    }
+    if allowed.get(order.status) != target:
+        raise HTTPException(status_code=409, detail="Order transition is not allowed")
+    previous = order.status
+    order.status = target
+    order.version += 1
+    db.add(
+        OrderStatusHistory(
+            company_id=order.company_id,
+            order_id=order.id,
+            from_status=previous.value,
+            to_status=target.value,
+            actor_id=actor_id,
+        )
+    )
+    db.flush()
+    return order
+
+
+def cancel_order(
+    db: Session,
+    order: Order,
+    *,
+    reason: str,
+    expected_version: int,
+    actor_id: uuid.UUID,
+) -> Order:
+    if order.version != expected_version:
+        raise HTTPException(status_code=409, detail="Order changed")
+    cancellable = {
+        OrderStatus.DRAFT,
+        OrderStatus.WAITING_CONFIRMATION,
+        OrderStatus.CONFIRMED,
+        OrderStatus.PREPARING,
+        OrderStatus.READY_FOR_DELIVERY,
+    }
+    if order.status not in cancellable:
+        raise HTTPException(status_code=409, detail="Order cannot be cancelled")
+    if order.status in {
+        OrderStatus.CONFIRMED,
+        OrderStatus.PREPARING,
+        OrderStatus.READY_FOR_DELIVERY,
+    }:
+        for item in order.items:
+            variant = db.scalar(
+                select(ProductVariant)
+                .where(
+                    ProductVariant.id == item.variant_id,
+                    ProductVariant.company_id == order.company_id,
+                )
+                .with_for_update()
+            )
+            if variant is None or variant.stock_reserved < item.quantity:
+                raise HTTPException(status_code=409, detail="Reserved stock is inconsistent")
+            variant.stock_reserved -= item.quantity
+            variant.version += 1
+    previous = order.status
+    order.status = OrderStatus.CANCELLED
+    order.version += 1
+    db.add(
+        OrderStatusHistory(
+            company_id=order.company_id,
+            order_id=order.id,
+            from_status=previous.value,
+            to_status=OrderStatus.CANCELLED.value,
+            actor_id=actor_id,
+        )
+    )
+    db.flush()
+    return order

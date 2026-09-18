@@ -78,6 +78,29 @@ def test_order_quote_confirmation_reserves_stock_once(
     ][0]
     assert product["variants"][0]["stock_reserved"] == 1
 
+    preparing = client.post(
+        f"/api/v1/companies/{company_id}/orders/{order_id}/transitions",
+        headers=headers,
+        json={"target_status": "PREPARING", "expected_version": first.json()["version"]},
+    )
+    assert preparing.status_code == 200
+    assert preparing.json()["status"] == "PREPARING"
+
+    cancelled = client.post(
+        f"/api/v1/companies/{company_id}/orders/{order_id}/cancel",
+        headers=headers,
+        json={
+            "reason": "Customer changed their mind",
+            "expected_version": preparing.json()["version"],
+        },
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "CANCELLED"
+    product = client.get(f"/api/v1/companies/{company_id}/products", headers=headers).json()[
+        "items"
+    ][0]
+    assert product["variants"][0]["stock_reserved"] == 0
+
 
 def test_workspace_pages_return_tenant_scoped_data(client: TestClient, db: Session, tenant: dict):
     company = tenant["company"]

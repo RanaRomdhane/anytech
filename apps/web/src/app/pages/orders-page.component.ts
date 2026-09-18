@@ -2,7 +2,7 @@ import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
-import { finalize, forkJoin } from 'rxjs';
+import { finalize, forkJoin, Observable } from 'rxjs';
 import { ApiService } from '../core/api.service';
 import { Customer, Order, Product } from '../core/models';
 
@@ -31,8 +31,8 @@ import { Customer, Order, Product } from '../core/models';
     </section>
     <section class="panel data-panel">
       <header class="panel-header"><div><span class="section-kicker">Suivi</span><h2>Flux des commandes</h2><p>{{ filteredOrders().length }} commande(s) affichée(s)</p></div><div class="filter-pills compact-pills"><button [class.active]="filter() === 'all'" (click)="filter.set('all')">Toutes</button><button [class.active]="filter() === 'action'" (click)="filter.set('action')">À traiter</button><button [class.active]="filter() === 'delivery'" (click)="filter.set('delivery')">Livraison</button></div></header>
-      <div class="responsive-table"><table><thead><tr><th>Référence</th><th>Articles</th><th>État</th><th>Date</th><th>Total</th></tr></thead><tbody>
-        @for (order of filteredOrders(); track order.id) { <tr><td><strong>#{{ order.id.slice(0, 8).toUpperCase() }}</strong></td><td><span class="item-stack"><strong>{{ order.items[0]?.product_name || 'Commande' }}</strong><small>{{ itemCount(order) }} unité(s)</small></span></td><td><span class="order-state" [attr.data-status]="order.status">{{ statusLabel(order.status) }}</span></td><td>{{ date(order.created_at) }}</td><td class="money-cell">{{ money(order.total_minor) }}</td></tr> }
+      <div class="responsive-table"><table><thead><tr><th>Référence</th><th>Articles</th><th>État</th><th>Date</th><th>Total</th><th>Action</th></tr></thead><tbody>
+        @for (order of filteredOrders(); track order.id) { <tr><td><strong>#{{ order.id.slice(0, 8).toUpperCase() }}</strong></td><td><span class="item-stack"><strong>{{ order.items[0]?.product_name || 'Commande' }}</strong><small>{{ itemCount(order) }} unité(s)</small></span></td><td><span class="order-state" [attr.data-status]="order.status">{{ statusLabel(order.status) }}</span></td><td>{{ date(order.created_at) }}</td><td class="money-cell">{{ money(order.total_minor) }}</td><td><div class="order-actions">@if (order.status === 'DRAFT') { <label class="delivery-fee"><span>Livraison TND</span><input type="number" min="0" step="0.001" [value]="deliveryFee(order.id)" (input)="setDeliveryFee(order.id, $any($event.target).value)" /></label><button type="button" [disabled]="acting() === order.id" (click)="quote(order)">Créer le devis</button> } @if (order.status === 'WAITING_CONFIRMATION') { <button type="button" [disabled]="acting() === order.id || !order.latest_quote_version" (click)="confirm(order)">Confirmer</button> } @if (order.status === 'CONFIRMED') { <button type="button" [disabled]="acting() === order.id" (click)="transition(order, 'PREPARING')">Préparer</button> } @if (order.status === 'PREPARING') { <button type="button" [disabled]="acting() === order.id" (click)="transition(order, 'READY_FOR_DELIVERY')">Marquer prête</button> } @if (canCancel(order)) { <button class="danger-action" type="button" [disabled]="acting() === order.id" (click)="cancel(order)">Annuler</button> }</div></td></tr> }
       </tbody></table></div>
       @if (!filteredOrders().length) { <div class="empty-state"><span class="empty-icon nav-icon" data-icon="bag"></span><h3>Aucune commande</h3><p>Créez une commande ou modifiez le filtre sélectionné.</p></div> }
     </section>
@@ -49,6 +49,8 @@ export class OrdersPageComponent {
   protected readonly saving = signal(false);
   protected readonly message = signal('');
   protected readonly isError = signal(false);
+  protected readonly acting = signal<string | null>(null);
+  protected readonly deliveryFees = signal<Record<string, number>>({});
   protected readonly filter = signal<'all' | 'action' | 'delivery'>('all');
   protected readonly form = new FormGroup({
     customerId: new FormControl('', { nonNullable: true }),
@@ -108,6 +110,15 @@ export class OrdersPageComponent {
         error: (error) => this.setMessage(error.message, true),
       });
   }
+
+  protected deliveryFee(orderId: string): number { return this.deliveryFees()[orderId] ?? 8; }
+  protected setDeliveryFee(orderId: string, value: string): void { this.deliveryFees.update((fees) => ({ ...fees, [orderId]: Math.max(0, Number(value) || 0) })); }
+  protected quote(order: Order): void { this.runAction(order, this.api.quoteOrder(order.id, Math.round(this.deliveryFee(order.id) * 1000)), 'Devis créé et prêt à confirmer.', true); }
+  protected confirm(order: Order): void { this.runAction(order, this.api.confirmOrder(order), 'Commande confirmée et stock réservé.'); }
+  protected transition(order: Order, status: 'PREPARING' | 'READY_FOR_DELIVERY'): void { this.runAction(order, this.api.transitionOrder(order, status), status === 'PREPARING' ? 'Préparation commencée.' : 'Commande prête à livrer.'); }
+  protected cancel(order: Order): void { this.runAction(order, this.api.cancelOrder(order), 'Commande annulée.'); }
+  protected canCancel(order: Order): boolean { return ['DRAFT', 'WAITING_CONFIRMATION', 'CONFIRMED', 'PREPARING', 'READY_FOR_DELIVERY'].includes(order.status); }
+  private runAction(order: Order, request: Observable<unknown>, success: string, reload = false): void { this.acting.set(order.id); request.pipe(finalize(() => this.acting.set(null)), takeUntilDestroyed(this.destroyRef)).subscribe({ next: (updated) => { if (reload) { this.load(); } else { this.orders.update((items) => items.map((item) => item.id === order.id ? updated as Order : item)); } this.setMessage(success); }, error: (error) => this.setMessage(error.message, true) }); }
 
   protected count(status: string): number { return this.orders().filter((order) => order.status === status).length; }
   protected itemCount(order: Order): number { return order.items.reduce((total, item) => total + item.quantity, 0); }

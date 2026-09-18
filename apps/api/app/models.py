@@ -83,6 +83,21 @@ class User(UUIDMixin, TimestampMixin, Base):
     platform_admin: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class AuthSession(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "auth_sessions"
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    family_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+    ip_address: Mapped[str] = mapped_column(String(80), default="")
+
+
 class Membership(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "memberships"
     __table_args__ = (UniqueConstraint("company_id", "user_id"),)
@@ -167,11 +182,13 @@ class Message(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "messages"
     __table_args__ = (
         UniqueConstraint("company_id", "external_id"),
+        UniqueConstraint("company_id", "client_message_id"),
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
     )
     company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"))
     conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     external_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    client_message_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     direction: Mapped[str] = mapped_column(String(20))
     sender_type: Mapped[str] = mapped_column(String(20))
     body: Mapped[str] = mapped_column(Text)
@@ -196,6 +213,16 @@ class Order(UUIDMixin, TimestampMixin, Base):
     quotes: Mapped[list[OrderQuote]] = relationship(
         back_populates="order", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def latest_quote_version(self) -> int | None:
+        return max((quote.version for quote in self.quotes), default=None)
+
+    @property
+    def quote_expires_at(self) -> datetime | None:
+        if not self.quotes:
+            return None
+        return max(self.quotes, key=lambda quote: quote.version).expires_at
 
 
 class OrderItem(UUIDMixin, TimestampMixin, Base):
@@ -250,6 +277,37 @@ class OutboxEvent(UUIDMixin, Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class RealtimeEvent(UUIDMixin, Base):
+    __tablename__ = "realtime_events"
+    __table_args__ = (Index("ix_realtime_company_created", "company_id", "created_at"),)
+    company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"))
+    event_type: Mapped[str] = mapped_column(String(100))
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AIRun(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "ai_runs"
+    __table_args__ = (Index("ix_ai_runs_company_created", "company_id", "created_at"),)
+    company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id", ondelete="CASCADE"))
+    conversation_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    provider: Mapped[str] = mapped_column(String(80))
+    model: Mapped[str] = mapped_column(String(160))
+    prompt_version: Mapped[str] = mapped_column(String(40), default="sales-draft-v1")
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    draft: Mapped[str] = mapped_column(Text, default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class AuditLog(UUIDMixin, Base):

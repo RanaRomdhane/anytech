@@ -70,6 +70,15 @@ export interface ConversationDetail {
   messages: Message[];
 }
 
+export interface AIDraft {
+  run_id: string;
+  content: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   variant_id: string;
@@ -86,6 +95,8 @@ export interface Order {
   delivery_minor: number;
   total_minor: number;
   version: number;
+  latest_quote_version: number | null;
+  quote_expires_at: string | null;
   items: OrderItem[];
   created_at: string;
   updated_at: string;
@@ -135,6 +146,23 @@ export interface AIStatus {
   model: string | null;
   monthly_budget_minor: number;
   spent_minor: number;
+  run_count: number;
+  successful_runs: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+export interface AIRun {
+  id: string;
+  conversation_id: string;
+  model: string;
+  prompt_version: string;
+  status: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  latency_ms: number;
+  error_code: string | null;
+  created_at: string;
 }
 
 export interface AuditEvent {

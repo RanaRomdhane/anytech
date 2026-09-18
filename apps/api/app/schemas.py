@@ -107,6 +107,20 @@ class MessageOut(StrictModel):
     created_at: datetime
 
 
+class MessageCreate(StrictModel):
+    body: str = Field(min_length=1, max_length=4000)
+    client_message_id: str = Field(min_length=8, max_length=200)
+
+
+class AIDraftOut(StrictModel):
+    run_id: uuid.UUID
+    content: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    created_at: datetime
+
+
 class ConversationDetailOut(StrictModel):
     conversation: ConversationOut
     customer: CustomerOut
@@ -144,6 +158,8 @@ class OrderOut(StrictModel):
     delivery_minor: int
     total_minor: int
     version: int
+    latest_quote_version: int | None
+    quote_expires_at: datetime | None
     items: list[OrderItemOut]
     created_at: datetime
     updated_at: datetime
@@ -166,6 +182,16 @@ class ConfirmOrder(StrictModel):
     quote_version: int = Field(ge=1)
     evidence_type: str = Field(pattern="^(staff|customer_message)$")
     evidence_id: str = Field(min_length=1, max_length=200)
+
+
+class OrderTransition(StrictModel):
+    target_status: str = Field(pattern="^(PREPARING|READY_FOR_DELIVERY)$")
+    expected_version: int = Field(ge=1)
+
+
+class OrderCancel(StrictModel):
+    reason: str = Field(min_length=3, max_length=500)
+    expected_version: int = Field(ge=1)
 
 
 class HealthOut(StrictModel):
@@ -224,6 +250,23 @@ class AIStatusOut(StrictModel):
     model: str | None
     monthly_budget_minor: int
     spent_minor: int
+    run_count: int
+    successful_runs: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
+class AIRunOut(StrictModel):
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    model: str
+    prompt_version: str
+    status: str
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: int
+    error_code: str | None
+    created_at: datetime
 
 
 class AuditOut(StrictModel):

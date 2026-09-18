@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -38,3 +40,16 @@ def decode_access_token(token: str) -> uuid.UUID:
         issuer="anytech-api",
     )
     return uuid.UUID(payload["sub"])
+
+
+def create_refresh_token() -> tuple[str, str]:
+    token = secrets.token_urlsafe(48)
+    return token, hash_refresh_token(token)
+
+
+def hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def refresh_expiry() -> datetime:
+    return datetime.now(UTC) + timedelta(days=settings.refresh_token_days)

@@ -17,6 +17,12 @@ export class AuthService {
       .pipe(tap(({ user }) => this.user.set(user)));
   }
 
+  refresh(): Observable<{ user: User }> {
+    return this.http
+      .post<{ user: User }>('/api/v1/auth/refresh', {}, { withCredentials: true })
+      .pipe(tap(({ user }) => this.user.set(user)));
+  }
+
   loadUser(): Observable<User> {
     return this.http
       .get<User>('/api/v1/me', { withCredentials: true })
@@ -27,5 +33,10 @@ export class AuthService {
     return this.http
       .post<void>('/api/v1/auth/logout', {}, { withCredentials: true })
       .pipe(tap(() => this.user.set(null)));
+  }
+
+
+  clear(): void {
+    this.user.set(null);
   }
 }

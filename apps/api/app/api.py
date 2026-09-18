@@ -1,7 +1,10 @@
+import asyncio
 import hashlib
 import hmac
+import json
 import uuid
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import (
     APIRouter,
@@ -15,16 +18,20 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, select
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.ai_service import generate_sales_draft
 from app.config import settings
-from app.db import Base, SessionLocal, engine, get_db
+from app.db import SessionLocal, get_db
 from app.dependencies import CompanyContext, company_context, current_user, require_admin
+from app.events import emit_event
 from app.models import (
+    AIRun,
     AuditLog,
+    AuthSession,
     Company,
     Conversation,
     ConversationMode,
@@ -37,11 +44,14 @@ from app.models import (
     OutboxEvent,
     Product,
     ProductVariant,
+    RealtimeEvent,
     Role,
     User,
     WebhookEvent,
 )
 from app.schemas import (
+    AIDraftOut,
+    AIRunOut,
     AIStatusOut,
     AnalyticsOut,
     AuditOut,
@@ -58,9 +68,12 @@ from app.schemas import (
     LoginOut,
     MembershipOut,
     MeOut,
+    MessageCreate,
     MessageOut,
+    OrderCancel,
     OrderCreate,
     OrderOut,
+    OrderTransition,
     PaginatedProducts,
     ProductCreate,
     ProductOut,
@@ -68,8 +81,22 @@ from app.schemas import (
     QuoteOut,
     TeamMemberOut,
 )
-from app.security import create_access_token, hash_password, verify_password
-from app.services import audit, confirm_order, create_order, quote_order
+from app.security import (
+    create_access_token,
+    create_refresh_token,
+    hash_password,
+    hash_refresh_token,
+    refresh_expiry,
+    verify_password,
+)
+from app.services import (
+    audit,
+    cancel_order,
+    confirm_order,
+    create_order,
+    quote_order,
+    transition_order,
+)
 
 
 def serialize_user(db: Session, user: User) -> MeOut:
@@ -80,6 +107,58 @@ def serialize_user(db: Session, user: User) -> MeOut:
         full_name=user.full_name,
         memberships=[MembershipOut.model_validate(item) for item in memberships],
     )
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return (
+        forwarded.split(",")[0].strip()
+        if forwarded
+        else request.client.host
+        if request.client
+        else ""
+    )[:80]
+
+
+def _set_session_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    common = {
+        "httponly": True,
+        "secure": settings.cookie_secure,
+        "samesite": "lax",
+        "path": "/",
+    }
+    response.set_cookie(
+        "access_token",
+        access_token,
+        max_age=settings.access_token_minutes * 60,
+        **common,
+    )
+    response.set_cookie(
+        "refresh_token",
+        refresh_token,
+        max_age=settings.refresh_token_days * 24 * 60 * 60,
+        **common,
+    )
+
+
+def _clear_session_cookies(response: Response) -> None:
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
+
+
+def _new_session(db: Session, user: User, request: Request, family_id: uuid.UUID | None = None):
+    refresh_token, token_hash = create_refresh_token()
+    session = AuthSession(
+        user_id=user.id,
+        family_id=family_id or uuid.uuid4(),
+        token_hash=token_hash,
+        expires_at=refresh_expiry(),
+        user_agent=request.headers.get("User-Agent", "")[:300],
+        ip_address=_client_ip(request),
+    )
+    db.add(session)
+    db.flush()
+    return session, refresh_token
 
 
 def seed_demo() -> None:
@@ -251,8 +330,7 @@ def seed_demo() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.app_env == "development":
-        Base.metadata.create_all(engine)
+    if settings.app_env == "development" and get_db not in app.dependency_overrides:
         seed_demo()
     yield
 
@@ -281,6 +359,28 @@ async def request_id_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
+
+@app.middleware("http")
+async def cookie_origin_middleware(request: Request, call_next):
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and (
+        request.cookies.get("access_token") or request.cookies.get("refresh_token")
+    ):
+        origin = request.headers.get("Origin")
+        same_origin = str(request.base_url).rstrip("/")
+        if origin and origin.rstrip("/") not in {*settings.origins, same_origin}:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "code": "UNTRUSTED_ORIGIN",
+                        "message": "Request origin is not allowed",
+                        "details": {},
+                        "request_id": getattr(request.state, "request_id", str(uuid.uuid4())),
+                    }
+                },
+            )
+    return await call_next(request)
 
 
 @app.exception_handler(HTTPException)
@@ -330,26 +430,78 @@ auth = APIRouter(prefix="/api/v1", tags=["Identity"])
 
 
 @auth.post("/auth/login", response_model=LoginOut)
-def login(payload: LoginIn, response: Response, db: Session = Depends(get_db)):
+def login(
+    payload: LoginIn,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     user = db.scalar(select(User).where(func.lower(User.email) == payload.email.lower()))
     if user is None or not user.active or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = create_access_token(user.id)
-    response.set_cookie(
-        "access_token",
-        token,
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        max_age=settings.access_token_minutes * 60,
-        path="/",
-    )
+    _, refresh_token = _new_session(db, user, request)
+    db.commit()
+    _set_session_cookies(response, token, refresh_token)
     return LoginOut(user=serialize_user(db, user), access_token=token)
 
 
+@auth.post("/auth/refresh", response_model=LoginOut)
+def refresh(request: Request, response: Response, db: Session = Depends(get_db)):
+    supplied = request.cookies.get("refresh_token")
+    if not supplied:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    session = db.scalar(
+        select(AuthSession)
+        .where(AuthSession.token_hash == hash_refresh_token(supplied))
+        .with_for_update()
+    )
+    now = datetime.now(UTC)
+    if session is None:
+        _clear_session_cookies(response)
+        raise HTTPException(status_code=401, detail="Invalid session")
+    expires_at = session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if session.revoked_at is not None:
+        db.query(AuthSession).filter(AuthSession.family_id == session.family_id).update(
+            {AuthSession.revoked_at: now}
+        )
+        db.commit()
+        _clear_session_cookies(response)
+        raise HTTPException(status_code=401, detail="Session reuse detected")
+    if expires_at <= now:
+        session.revoked_at = now
+        db.commit()
+        _clear_session_cookies(response)
+        raise HTTPException(status_code=401, detail="Session expired")
+    user = db.get(User, session.user_id)
+    if user is None or not user.active:
+        session.revoked_at = now
+        db.commit()
+        _clear_session_cookies(response)
+        raise HTTPException(status_code=401, detail="Invalid session")
+    replacement, refresh_token = _new_session(db, user, request, session.family_id)
+    session.revoked_at = now
+    session.last_used_at = now
+    session.replaced_by = replacement.id
+    access_token = create_access_token(user.id)
+    db.commit()
+    _set_session_cookies(response, access_token, refresh_token)
+    return LoginOut(user=serialize_user(db, user), access_token=access_token)
+
+
 @auth.post("/auth/logout", status_code=204)
-def logout(response: Response):
-    response.delete_cookie("access_token", path="/")
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    supplied = request.cookies.get("refresh_token")
+    if supplied:
+        session = db.scalar(
+            select(AuthSession).where(AuthSession.token_hash == hash_refresh_token(supplied))
+        )
+        if session and session.revoked_at is None:
+            session.revoked_at = datetime.now(UTC)
+            db.commit()
+    _clear_session_cookies(response)
 
 
 @auth.get("/me", response_model=MeOut)
@@ -386,6 +538,12 @@ def update_settings(
         actor_id=context.user.id,
         action="company.settings.updated",
         resource_type="company",
+        resource_id=company.id,
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="company.updated",
         resource_id=company.id,
     )
     db.commit()
@@ -518,15 +676,33 @@ def integration_status(context: CompanyContext = Depends(company_context)):
 
 
 @workspace.get("/ai/status", response_model=AIStatusOut)
-def ai_status(context: CompanyContext = Depends(company_context)):
-    del context
+def ai_status(context: CompanyContext = Depends(company_context), db: Session = Depends(get_db)):
+    runs = db.scalars(
+        select(AIRun)
+        .where(AIRun.company_id == context.company_id)
+        .order_by(AIRun.created_at.desc())
+    ).all()
     return AIStatusOut(
         configured=bool(settings.llm_provider and settings.llm_model and settings.llm_api_key),
         provider=settings.llm_provider or None,
         model=settings.llm_model or None,
         monthly_budget_minor=settings.llm_monthly_budget_minor,
         spent_minor=0,
+        run_count=len(runs),
+        successful_runs=sum(run.status == "completed" for run in runs),
+        prompt_tokens=sum(run.prompt_tokens for run in runs),
+        completion_tokens=sum(run.completion_tokens for run in runs),
     )
+
+
+@workspace.get("/ai/runs", response_model=list[AIRunOut])
+def list_ai_runs(context: CompanyContext = Depends(require_admin), db: Session = Depends(get_db)):
+    return db.scalars(
+        select(AIRun)
+        .where(AIRun.company_id == context.company_id)
+        .order_by(AIRun.created_at.desc())
+        .limit(50)
+    ).all()
 
 
 @workspace.get("/audit", response_model=list[AuditOut])
@@ -560,6 +736,76 @@ def list_deliveries(
         )
         .unique()
         .all()
+    )
+
+
+@workspace.get("/events")
+async def stream_events(
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    cursor = datetime.now(UTC)
+    resync = False
+    if last_event_id:
+        try:
+            previous = db.scalar(
+                select(RealtimeEvent).where(
+                    RealtimeEvent.id == uuid.UUID(last_event_id),
+                    RealtimeEvent.company_id == context.company_id,
+                )
+            )
+        except ValueError:
+            previous = None
+        if previous:
+            cursor = previous.created_at
+            if cursor.tzinfo is None:
+                cursor = cursor.replace(tzinfo=UTC)
+        else:
+            resync = True
+
+    async def generate():
+        nonlocal cursor
+        yield "retry: 3000\n\n"
+        if resync:
+            yield 'data: {"type":"resync.required"}\n\n'
+        while not await request.is_disconnected():
+            with SessionLocal() as event_db:
+                if event_db.bind and event_db.bind.dialect.name == "postgresql":
+                    event_db.execute(
+                        text("select set_config('app.current_company_id', :company_id, true)"),
+                        {"company_id": str(context.company_id)},
+                    )
+                events = event_db.scalars(
+                    select(RealtimeEvent)
+                    .where(
+                        RealtimeEvent.company_id == context.company_id,
+                        RealtimeEvent.created_at > cursor,
+                    )
+                    .order_by(RealtimeEvent.created_at)
+                    .limit(100)
+                ).all()
+                for event in events:
+                    created_at = event.created_at
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=UTC)
+                    cursor = max(cursor, created_at)
+                    data = {
+                        "event_id": str(event.id),
+                        "type": event.event_type,
+                        "resource_id": str(event.resource_id) if event.resource_id else None,
+                        "version": event.version,
+                        "timestamp": created_at.isoformat(),
+                        **event.payload,
+                    }
+                    yield f"id: {event.id}\ndata: {json.dumps(data)}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -605,6 +851,12 @@ def add_product(
         actor_id=context.user.id,
         action="product.created",
         resource_type="product",
+        resource_id=product.id,
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="product.created",
         resource_id=product.id,
     )
     db.commit()
@@ -671,6 +923,138 @@ def conversation_detail(
     )
 
 
+@messaging.post(
+    "/conversations/{conversation_id}/ai-draft",
+    response_model=AIDraftOut,
+)
+async def create_ai_draft(
+    conversation_id: uuid.UUID,
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    if not settings.llm_api_key or not settings.llm_model or not settings.llm_provider:
+        raise HTTPException(status_code=503, detail="AI provider is not configured")
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.company_id == context.company_id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    run = await generate_sales_draft(
+        db,
+        company_id=context.company_id,
+        conversation=conversation,
+        actor_id=context.user.id,
+    )
+    audit(
+        db,
+        company_id=context.company_id,
+        actor_id=context.user.id,
+        action="ai.draft.generated" if run.status == "completed" else "ai.draft.failed",
+        resource_type="ai_run",
+        resource_id=run.id,
+        details={"model": run.model, "prompt_version": run.prompt_version},
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="ai.draft.completed" if run.status == "completed" else "ai.draft.failed",
+        resource_id=run.id,
+        payload={"conversation_id": str(conversation.id)},
+    )
+    db.commit()
+    db.refresh(run)
+    if run.status != "completed":
+        raise HTTPException(status_code=503, detail="AI provider is unavailable")
+    return AIDraftOut(
+        run_id=run.id,
+        content=run.draft,
+        model=run.model,
+        prompt_tokens=run.prompt_tokens,
+        completion_tokens=run.completion_tokens,
+        created_at=run.created_at,
+    )
+
+
+@messaging.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=MessageOut,
+    status_code=201,
+)
+def create_outbound_message(
+    conversation_id: uuid.UUID,
+    payload: MessageCreate,
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.company_id == context.company_id,
+        )
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    existing = db.scalar(
+        select(Message).where(
+            Message.company_id == context.company_id,
+            Message.client_message_id == payload.client_message_id,
+        )
+    )
+    if existing:
+        if existing.conversation_id != conversation_id or existing.body != payload.body.strip():
+            raise HTTPException(status_code=409, detail="Client message ID reused")
+        return existing
+    channel_ready = bool(
+        settings.whatsapp_access_token
+        and settings.whatsapp_phone_number_id
+        and settings.whatsapp_app_secret
+    )
+    message = Message(
+        company_id=context.company_id,
+        conversation_id=conversation.id,
+        client_message_id=payload.client_message_id,
+        direction="outbound",
+        sender_type="staff",
+        body=payload.body.strip(),
+        status="queued" if channel_ready else "draft",
+    )
+    db.add(message)
+    db.flush()
+    if channel_ready:
+        db.add(
+            OutboxEvent(
+                topic="whatsapp.message.send",
+                aggregate_id=message.id,
+                payload={
+                    "company_id": str(context.company_id),
+                    "conversation_id": str(conversation.id),
+                    "message_id": str(message.id),
+                },
+            )
+        )
+    audit(
+        db,
+        company_id=context.company_id,
+        actor_id=context.user.id,
+        action="message.queued" if channel_ready else "message.draft.saved",
+        resource_type="message",
+        resource_id=message.id,
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="message.created",
+        resource_id=message.id,
+        payload={"conversation_id": str(conversation.id), "status": message.status},
+    )
+    db.commit()
+    db.refresh(message)
+    return message
+
+
 def _change_mode(
     db: Session,
     context: CompanyContext,
@@ -702,6 +1086,14 @@ def _change_mode(
         action=f"conversation.{mode.value.lower()}",
         resource_type="conversation",
         resource_id=conversation.id,
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="conversation.updated",
+        resource_id=conversation.id,
+        version=conversation.version,
+        payload={"mode": conversation.mode.value},
     )
     db.commit()
     db.refresh(conversation)
@@ -769,6 +1161,13 @@ def add_order(
         resource_type="order",
         resource_id=order.id,
     )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="order.created",
+        resource_id=order.id,
+        version=order.version,
+    )
     db.commit()
     db.refresh(order)
     return order
@@ -783,6 +1182,14 @@ def add_quote(
 ):
     order = scoped_order(db, context.company_id, order_id)
     quote = quote_order(db, order, payload.delivery_minor)
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="order.updated",
+        resource_id=order.id,
+        version=order.version,
+        payload={"status": order.status.value},
+    )
     db.commit()
     db.refresh(quote)
     return quote
@@ -817,6 +1224,87 @@ def confirm(
         resource_type="order",
         resource_id=order.id,
         details={"idempotency_key": idempotency_key},
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="order.updated",
+        resource_id=order.id,
+        version=order.version,
+        payload={"status": order.status.value},
+    )
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@orders.post("/orders/{order_id}/transitions", response_model=OrderOut)
+def transition(
+    order_id: uuid.UUID,
+    payload: OrderTransition,
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    order = scoped_order(db, context.company_id, order_id)
+    transition_order(
+        db,
+        order,
+        target=OrderStatus(payload.target_status),
+        expected_version=payload.expected_version,
+        actor_id=context.user.id,
+    )
+    audit(
+        db,
+        company_id=context.company_id,
+        actor_id=context.user.id,
+        action=f"order.{order.status.value.lower()}",
+        resource_type="order",
+        resource_id=order.id,
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="order.updated",
+        resource_id=order.id,
+        version=order.version,
+        payload={"status": order.status.value},
+    )
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+@orders.post("/orders/{order_id}/cancel", response_model=OrderOut)
+def cancel(
+    order_id: uuid.UUID,
+    payload: OrderCancel,
+    context: CompanyContext = Depends(company_context),
+    db: Session = Depends(get_db),
+):
+    order = scoped_order(db, context.company_id, order_id)
+    cancel_order(
+        db,
+        order,
+        reason=payload.reason,
+        expected_version=payload.expected_version,
+        actor_id=context.user.id,
+    )
+    audit(
+        db,
+        company_id=context.company_id,
+        actor_id=context.user.id,
+        action="order.cancelled",
+        resource_type="order",
+        resource_id=order.id,
+        details={"reason": payload.reason},
+    )
+    emit_event(
+        db,
+        company_id=context.company_id,
+        event_type="order.updated",
+        resource_id=order.id,
+        version=order.version,
+        payload={"status": order.status.value},
     )
     db.commit()
     db.refresh(order)

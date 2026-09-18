@@ -13,12 +13,16 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = Field(default="dev-only-change-this-secret-before-production", min_length=32)
     access_token_minutes: int = 15
+    refresh_token_days: int = 7
     allowed_origins: str = "http://localhost:4200"
     cookie_secure: bool = False
     demo_mode: bool = True
     whatsapp_verify_token: str = ""
     whatsapp_app_secret: str = ""
     whatsapp_phone_number_id: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_graph_base_url: str = "https://graph.facebook.com"
+    whatsapp_graph_version: str = "v23.0"
     llm_provider: str = ""
     llm_model: str = ""
     llm_api_key: str = ""
